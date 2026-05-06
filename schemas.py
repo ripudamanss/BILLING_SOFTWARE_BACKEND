@@ -11,6 +11,8 @@ class Item(BaseModel):
 
 class BillCreate(BaseModel):
     customer: str
+    customeradd1: str | None = None
+    customeradd2: str | None = None
     date: date
     items: List[Item]
     
@@ -20,5 +22,6 @@ class BillResponse(BaseModel):
     total: float
     
     class Config:
-        orm_mode = True
+        # orm_mode = True
+        from_attributes = True
         

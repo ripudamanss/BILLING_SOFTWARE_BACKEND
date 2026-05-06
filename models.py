@@ -6,8 +6,11 @@ class Bill(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     customer = Column(String)
+    customeradd1 = Column(String, nullable=True)
+    customeradd2 = Column(String, nullable=True)
     total = Column(Float)
     date = Column(Date) 
+    pdf_url = Column(String, nullable=True)
 
 class BillItem(Base):
     __tablename__ = "bill_items"
@@ -16,7 +19,7 @@ class BillItem(Base):
     bill_id = Column(Integer, ForeignKey("bills.id"))
     description = Column(String)
     note = Column(String)
-    qty = Column(Integer)
+    qty = Column(Float)
     unit = Column(String)
     price = Column(Float)
     total = Column(Float)

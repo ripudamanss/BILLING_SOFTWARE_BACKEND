@@ -4,9 +4,12 @@ import models
 def create_bill(db: Session, bill_data):
     total = 0
 
-    bill = models.Bill(customer=bill_data.customer,
-                       total=0,
-                       date=bill_data.date)
+    bill = models.Bill(
+                    customer=bill_data.customer,
+                    customeradd1=bill_data.customeradd1,
+                    customeradd2=bill_data.customeradd2,
+                    total=0,
+                    date=bill_data.date)
     db.add(bill)
     db.commit()
     db.refresh(bill)

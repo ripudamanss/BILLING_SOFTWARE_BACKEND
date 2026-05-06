@@ -37,7 +37,7 @@ def generate_pdf(filename, bill, items):
             </td>
 
             <td>
-                {item.qty}<br>
+                {format(item.qty, ".2f").rstrip('0').rstrip('.')}<br>
                 <span style="font-size:11px; display:block; margin-top:3px">
                     {unit_display}
                 </span>
@@ -71,15 +71,22 @@ def generate_pdf(filename, bill, items):
     <meta charset="UTF-8">
 
     <style>
+    @page {{
+        size: A4;
+        margin: 8mm;
+    }}
     body {{
         font-family: Arial, sans-serif;
-        padding: 20px;
+        padding: 15px;
+        line-height: 1.3;
+        color: #111;
     }}
 
     .container {{
         border: 2px solid black;
-        padding: 12px;
-        width: 95%;
+        padding: 18px;
+        width: 92%;
+        max-width: 760px;
         margin: auto;
         box-sizing: border-box;
     }}
@@ -87,12 +94,26 @@ def generate_pdf(filename, bill, items):
     .title {{
         text-align: center;
         font-weight: bold;
-        font-size: 18px;
-        margin-bottom: 10px;
+        font-size: 24px;
+        letter-spacing: 1px;
+        margin-bottom: 20px;
+        color: #111;
+    }}
+
+    .customer-section {{
+        margin-bottom: 25px;
+        font-size: 15px;
+    }}
+
+    p {{
+        margin-top: 10px;
+        margin-bottom: 20px;
+        font-size: 15px;
     }}
 
     .header {{
         width: 100%;
+        margin-bottom: 25px;
     }}
 
     .left {{
@@ -113,23 +134,33 @@ def generate_pdf(filename, bill, items):
     table {{
         width: 100%;
         border-collapse: collapse;
-        margin-top: 10px;
+        margin-top: 15px;
         box-sizing: border-box;
+        page-break-inside: avoid;
     }}
 
     th {{
-        background-color: #d9d9d9;
+        background-color: #dcdcdc;
         font-weight: bold;
+        text-transform: uppercase;
+        font-size: 15px;
     }}
 
-    th, td {{
+    /*th, td {{
         border: 1px solid black;
-        padding: 6px;
-        font-size: 13px;
+        padding: 14px 10px;
+        font-size: 14px;
         line-height: 1.4;
         overflow-wrap: break-word;
         vertical-align: top;
         word-break: break-word;
+    }}*/
+    th, td {{
+        border: 1px solid black;
+        padding: 10px 8px;
+        font-size: 13px;
+        line-height: 1.3;
+        vertical-align: top;
     }}
 
     td {{
@@ -151,12 +182,13 @@ def generate_pdf(filename, bill, items):
     }}
 
     .footer {{
-        margin-top: 20px;
+        margin-top: 30px;
     }}
 
     .signature {{
         text-align: right;
-        margin-top: 50px;
+        margin-top: 45px;
+        font-size: 15px;
     }}
 
     .col-sno {{
@@ -209,10 +241,14 @@ def generate_pdf(filename, bill, items):
 
         <br>
 
-        <div>
+        <div class="customer-section">
             <b>To,</b><br>
 
             {bill.customer}<br>
+
+            {f"{bill.customeradd1}<br>" if bill.customeradd1 else ""}
+
+            {bill.customeradd2 if bill.customeradd2 else ""}
         </div>
 
         <br>
@@ -240,13 +276,13 @@ def generate_pdf(filename, bill, items):
                     TOTAL
                 </td>
 
-                <td style="text-align:right; padding-right:10px;">
+                <td style="text-align:right; white-space:nowrap; padding-right:10px;">
                     ₹ {format(calculated_total, ".2f")}
                 </td>
             </tr>
 
             <tr class="grand-total">
-                <td colspan="4" style="text-align:right;">
+                <td colspan="4" style="text-align:right; white-space:nowrap;">
                     GRAND TOTAL
                 </td>
 
