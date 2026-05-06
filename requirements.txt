@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+python-jose
+passlib
+supabase
+pdfkit
+python-dotenv
+weasyprint
