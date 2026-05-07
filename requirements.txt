@@ -8,3 +8,4 @@ supabase
 pdfkit
 python-dotenv
 weasyprint
+psycopg2-binary
