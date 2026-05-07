@@ -51,23 +51,13 @@ def verify_api_key(x_api_key: str = Header(None)):
 
 app = FastAPI()
 
-# CORS
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=[
-#         "http://localhost:3000",
-#         "http://127.0.0.1:3000",
-#         "*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-
+# CORS 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "http://127.0.0.1:3000"
+        "http://127.0.0.1:3000",
+        "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -114,11 +104,10 @@ def create_bill(bill: schemas.BillCreate, db: Session = Depends(get_db)):
     return crud.create_bill(db, bill)
 
 
-# GET ALL
+#GET ALL
 @app.get("/bills", dependencies=[Depends(get_current_user)])
 def get_bills(db: Session = Depends(get_db)):
-    return db.query(models.Bill).all()
-
+    return db.query(models.Bill).order_by(models.Bill.id.asc()).all()
 
 # GET SINGLE
 @app.get("/bills/{bill_id}", dependencies=[Depends(get_current_user)])
@@ -140,12 +129,12 @@ def get_bill(bill_id: int, db: Session = Depends(get_db)):
         "items": items
     }
 
-
 # UPDATE
 @app.put("/bills/{bill_id}", dependencies=[Depends(get_current_user)])
 def update_bill(bill_id: int, bill_data: schemas.BillCreate, db: Session = Depends(get_db)):
 
-    bill = db.query(models.Bill).get(bill_id)
+    # bill = db.query(models.Bill).get(bill_id)
+    bill = db.get(models.Bill, bill_id)
 
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not Found!") #Fix to Raise Exception That Bill Is not Found
@@ -189,7 +178,7 @@ def get_pdf(bill_id: int, db: Session = Depends(get_db)):
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
 
-    # 🔥 ADDED: Return existing PDF if already generated
+    # ADDED: Return existing PDF if already generated
     if bill.pdf_url:
         return {
             "success": True,
@@ -199,10 +188,11 @@ def get_pdf(bill_id: int, db: Session = Depends(get_db)):
 
     items = db.query(models.BillItem).filter_by(bill_id=bill_id).all()
 
-    # 🔥 Generate unique file name to prevent unauthorized access
+    # Generate unique file name to prevent unauthorized access
     filename = f"bill_{bill_id}_{uuid.uuid4().hex}.pdf"
 
-    # 🔥 PDF GENERATION
+
+    # PDF GENERATION
     try:
 
         # Generate PDF locally
@@ -220,7 +210,7 @@ def get_pdf(bill_id: int, db: Session = Depends(get_db)):
             detail="PDF generation Failed!"
         )
 
-    # 🔥 Upload to Supabase
+    # Upload to Supabase
     try:
 
         with open(filename, "rb") as f:
@@ -297,82 +287,3 @@ def delete_bill(bill_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"message": "Deleted"}
-
-# # PDF API (UPDATED FOR PERMANENT STORAGE)
-# @app.get("/bills/{bill_id}/pdf", dependencies=[Depends(get_current_user)])
-# def get_pdf(bill_id: int, db: Session = Depends(get_db)):
-#     bill = db.get(models.Bill, bill_id)
-
-#     if not bill:
-#         raise HTTPException(status_code=404, detail="Bill not found")
-
-#     items = db.query(models.BillItem).filter_by(bill_id=bill_id).all()
-
-#     # 🔥 Generate unique file name to prevent unauthorized access from name in url
-#     # filename = f"bill_{bill_id}.pdf"
-#     filename = f"bill_{bill_id}_{uuid.uuid4().hex}.pdf"
-
-#     # Fix Bill Generation 
-#     try:
-#         # Generate PDF locally
-#         generate_pdf(filename, bill, items)
-#         print("PDF Generating...")
-#         print("PDF CREATED:", filename)
-#     except Exception as e:  #This added 
-#         print("PDF Generation ERROR:", e)
-#         raise HTTPException(status_code=500, detail="PDF generation Failed!")
-        
-
-#     # New Upload to supabase syntax
-#     # 🔥 FIX: Upload PDF to Supabase
-#     try:
-#         with open(filename, "rb") as f:
-#             supabase.storage.from_("bills").upload(
-#                 filename,
-#                 f,
-#                 {
-#                     "content-type": "application/pdf",
-#                     "upsert": "true"
-#                 } #type: ignore
-#             )
-
-#         print("PDF uploaded successfully!")
-
-#     except Exception as e:
-#         print("SUPABASE UPLOAD ERROR:", e)
-#         raise HTTPException(status_code=500, detail="Supabase upload failed")
-
-#     # Added URL ONE
-#     try:
-#         public_url = supabase.storage.from_("bills").get_public_url(filename)
-#     except Exception as e:
-#         print("URL ERROR:", e)
-#         raise HTTPException(status_code=500, detail="URL retrieval failed")
-    
-
-#     # NEW FIX
-#     try:
-#         os.remove(filename)
-#     except:
-#         pass
-    
-
-#     return {
-#         "success": True,
-#         "message": "PDF GENERATED SUCCESSFULLY !",
-#         "pdf_url": public_url
-#     }
-# # DELETE
-# @app.delete("/bills/{bill_id}", dependencies=[Depends(get_current_user)])
-# def delete_bill(bill_id: int, db: Session = Depends(get_db)):
-
-#     bill = db.get(models.Bill, bill_id)
-
-#     if not bill:
-#         raise HTTPException(status_code=404, detail="Bill not found")
-
-#     db.query(models.BillItem).filter_by(bill_id=bill_id).delete()
-#     db.delete(bill)
-#     db.commit()
-
-#     return {"message": "Deleted"}
