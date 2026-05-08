@@ -9,4 +9,4 @@ billing.db
 *.pdf
 .env
 crud.py.txt
-.gitignore
+main.py.txt
