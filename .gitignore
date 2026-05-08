@@ -8,3 +8,5 @@ venv/
 billing.db
 *.pdf
 .env
+crud.py.txt
+.gitignore
