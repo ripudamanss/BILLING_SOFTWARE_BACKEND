@@ -22,6 +22,8 @@ import os
 # Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY") 
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
+ADMIN_PASS = os.getenv("ADMIN_PASSWORD")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # AUTH CONFIG
@@ -67,7 +69,7 @@ app.add_middleware(
 # LOGIN
 @app.post("/login")
 def login(data: LoginData):
-    if data.username != "admin" or data.password != "2102":
+    if data.username != ADMIN_USERNAME or data.password != ADMIN_PASS:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
