@@ -85,7 +85,13 @@ def login(data: LoginData):
         algorithm=ALGORITHM
     )
 
-    return {"access_token": token}
+    # Feature added 12 may 26
+    # return {"access_token": token}
+    return {
+        "access_token": token,
+        "token-type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    }
 
 
 
