@@ -23,8 +23,12 @@ import os
 # Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY") 
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
-ADMIN_PASS = os.getenv("ADMIN_PASSWORD")
+# ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
+# ADMIN_PASS = os.getenv("ADMIN_PASSWORD")
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto"
+)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # AUTH CONFIG
@@ -37,16 +41,79 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 class LoginData(BaseModel):
     username: str
     password: str
+    
+# Added 12 may 2026 (45 to 59) line
+# HASH PASSWORD
+def hash_password(password: str):
+    return pwd_context.hash(password)
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
+
+# VERIFY PASSWORD
+def verify_password(
+    plain_password,
+    hashed_password
+):
+    return pwd_context.verify(
+        plain_password,
+        hashed_password
+    )
+
+# def get_current_user(token: str = Depends(oauth2_scheme)):
+#     try:
+#         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+#         user = payload.get("sub")
+#         if user is None:
+#             raise HTTPException(status_code=401, detail="Invalid token")
+#         return user
+#     except JWTError:
+#         raise HTTPException(status_code=401, detail="Invalid token")
+
+# Added 12 may 2026
+def get_current_user(
+    token: str = Depends(oauth2_scheme)
+):
+
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user = payload.get("sub")
-        if user is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return user
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+
+        username = payload.get("sub")
+        role = payload.get("role")
+
+        if username is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid token"
+            )
+
+        return {
+            "username": username,
+            "role": role
+        }
+
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid token"
+        )
+
+# Added 12 may 2026
+
+def require_admin(
+    current_user = Depends(get_current_user)
+):
+
+    if current_user["role"] != "admin":
+
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required"
+        )
+
+    return current_user
 
 def verify_api_key(x_api_key: str = Header(None)):
     return True  # disabled
@@ -67,35 +134,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# LOGIN
-@app.post("/login")
-def login(data: LoginData):
-    if data.username != ADMIN_USERNAME or data.password != ADMIN_PASS:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-
-    # Checking whether SECRET KEY is Present or Not !
-    if not SECRET_KEY:
-        raise HTTPException(status_code=500, detail="SECRET_KEY missing")
-
-    token = jwt.encode(
-        {"sub": data.username, "exp": expire},
-        SECRET_KEY,
-        algorithm=ALGORITHM
-    )
-
-    # Feature added 12 may 26
-    return {
-        "access_token": token,
-        "token-type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
-    }
-
-
-
-models.Base.metadata.create_all(bind=engine)
-
 # DB Dependency
 def get_db():
     db = SessionLocal()
@@ -103,6 +141,120 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# Added 12 may 2026 
+# REGISTER USER
+@app.post("/register", dependencies=[Depends(require_admin)])
+def register_user(
+    user: schemas.UserCreate,
+    db: Session = Depends(get_db)
+):
+
+    existing_user = db.query(models.User).filter(
+        models.User.username == user.username
+    ).first()
+    
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Username already exists"
+        )
+        
+    hashed_password = hash_password(
+        user.password
+    )
+    
+    new_user = models.User(
+        username=user.username,
+        password=hashed_password,
+        role=user.role
+    )
+    db.add(new_user)
+    db.commit()
+    return {
+        "message": "User created successfully"
+    }
+
+# LOGIN
+# @app.post("/login")
+# def login(data: LoginData):
+#     if data.username != ADMIN_USERNAME or data.password != ADMIN_PASS:
+#         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+#     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+
+#     # Checking whether SECRET KEY is Present or Not !
+#     if not SECRET_KEY:
+#         raise HTTPException(status_code=500, detail="SECRET_KEY missing")
+
+#     token = jwt.encode(
+#         {"sub": data.username, "exp": expire},
+#         SECRET_KEY,
+#         algorithm=ALGORITHM
+#     )
+
+#     # Feature added 12 may 26
+#     return {
+#         "access_token": token,
+#         "token-type": "bearer",
+#         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+#     }
+
+# Added 12 may 2026 
+@app.post("/login")
+def login(
+    data: schemas.UserLogin,
+    db: Session = Depends(get_db)
+):
+
+    user = db.query(models.User).filter(
+        models.User.username == data.username
+    ).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials"
+        )
+
+    if not verify_password(
+        data.password,
+        user.password
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials"
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="User disabled"
+        )
+
+    expire = datetime.utcnow() + timedelta(
+        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+    )
+
+    token = jwt.encode(
+        {
+            "sub": user.username,
+            "role": user.role,
+            "exp": expire
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM
+    )
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "role": user.role,
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    }
+
+
+models.Base.metadata.create_all(bind=engine)
 
 
 # CREATE BILL

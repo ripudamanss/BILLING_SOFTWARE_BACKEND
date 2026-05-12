@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Date
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, Date, Boolean
 from database import Base
 
 class Bill(Base):
@@ -23,3 +23,14 @@ class BillItem(Base):
     unit = Column(String)
     price = Column(Float)
     total = Column(Float)
+    
+    
+    # Added 12 may 2026
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, nullable=False)
+    password = Column(String, nullable=False)
+    role = Column(String, default="staff")
+    is_active = Column(Boolean, default=True)

@@ -25,3 +25,13 @@ class BillResponse(BaseModel):
         # orm_mode = True
         from_attributes = True
         
+# Added 12 may 2026
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str = "staff"
+
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
