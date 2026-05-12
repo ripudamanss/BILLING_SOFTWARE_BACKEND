@@ -34,3 +34,13 @@ class User(Base):
     password = Column(String, nullable=False)
     role = Column(String, default="staff")
     is_active = Column(Boolean, default=True)
+    
+    
+# Added 12 may 2026 for admin.html
+class ItemMaster(Base):
+    __tablename__ = "items"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    description = Column(String, unique=True)
+    unit = Column(String)
+    price = Column(Float)

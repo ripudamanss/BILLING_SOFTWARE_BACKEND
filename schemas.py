@@ -35,3 +35,20 @@ class UserCreate(BaseModel):
 class UserLogin(BaseModel):
     username: str
     password: str
+    
+    
+# Added 12 may 2026 For admin.html
+class ItemCreate(BaseModel):
+    description: str
+    unit: str
+    price: float
+
+
+class ItemResponse(BaseModel):
+    id: int
+    description: str
+    unit: str
+    price: float
+
+    class Config:
+        from_attributes = True

@@ -105,7 +105,6 @@ def get_current_user(
 def require_admin(
     current_user = Depends(get_current_user)
 ):
-
     if current_user["role"] != "admin":
 
         raise HTTPException(
@@ -114,6 +113,7 @@ def require_admin(
         )
 
     return current_user
+
 
 def verify_api_key(x_api_key: str = Header(None)):
     return True  # disabled
@@ -199,6 +199,258 @@ def register_user(
 #         "token-type": "bearer",
 #         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
 #     }
+
+# Added 12 may 2026 for admin.html
+# =========================
+# ADMIN USER MANAGEMENT
+# =========================
+
+@app.get(
+    "/users",
+    dependencies=[Depends(require_admin)]
+)
+def get_users(
+    db: Session = Depends(get_db)
+):
+
+    users = db.query(models.User).all()
+
+    return [
+
+        {
+            "id": user.id,
+            "username": user.username,
+            "role": user.role,
+            "is_active": user.is_active
+        }
+
+        for user in users
+    ]
+
+
+@app.post(
+    "/users",
+    dependencies=[Depends(require_admin)]
+)
+def create_user(
+    user: schemas.UserCreate,
+    db: Session = Depends(get_db)
+):
+
+    existing_user = db.query(models.User).filter(
+        models.User.username == user.username
+    ).first()
+
+    if existing_user:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Username already exists"
+        )
+
+    new_user = models.User(
+        username=user.username,
+        password=hash_password(user.password),
+        role=user.role,
+        is_active=True
+    )
+
+    db.add(new_user)
+
+    db.commit()
+
+    return {
+        "message": "User created successfully"
+    }
+
+
+@app.put(
+    "/users/{user_id}/toggle",
+    dependencies=[Depends(require_admin)]
+)
+def toggle_user(
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+
+    user = db.get(models.User, user_id)
+
+    if not user:
+
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    user.is_active = not user.is_active
+
+    db.commit()
+
+    return {
+        "message": "User status updated"
+    }
+
+
+@app.delete(
+    "/users/{user_id}",
+    dependencies=[Depends(require_admin)]
+)
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+
+    user = db.get(models.User, user_id)
+
+    if not user:
+
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    db.delete(user)
+
+    db.commit()
+
+    return {
+        "message": "User deleted"
+    }
+
+
+# =========================
+# ITEM MANAGEMENT
+# =========================
+
+@app.get(
+    "/admin/items",
+    dependencies=[Depends(require_admin)]
+)
+def admin_get_items(
+    db: Session = Depends(get_db)
+):
+
+    result = db.execute(
+        text("""
+            SELECT
+                id,
+                description,
+                unit,
+                price
+            FROM items
+            ORDER BY description
+        """)
+    )
+
+    rows = result.fetchall()
+
+    return [
+
+        {
+            "id": row[0],
+            "description": row[1],
+            "unit": row[2],
+            "price": float(row[3])
+        }
+
+        for row in rows
+    ]
+
+
+@app.post(
+    "/admin/items",
+    dependencies=[Depends(require_admin)]
+)
+def create_item(
+    item: schemas.ItemCreate,
+    db: Session = Depends(get_db)
+):
+
+    db.execute(
+        text("""
+            INSERT INTO items (
+                description,
+                unit,
+                price
+            )
+            VALUES (
+                :description,
+                :unit,
+                :price
+            )
+        """),
+        {
+            "description": item.description,
+            "unit": item.unit,
+            "price": item.price
+        }
+    )
+
+    db.commit()
+
+    return {
+        "message": "Item created"
+    }
+
+
+@app.put(
+    "/admin/items/{item_id}",
+    dependencies=[Depends(require_admin)]
+)
+def update_item(
+    item_id: int,
+    item: schemas.ItemCreate,
+    db: Session = Depends(get_db)
+):
+
+    db.execute(
+        text("""
+            UPDATE items
+            SET
+                description = :description,
+                unit = :unit,
+                price = :price
+            WHERE id = :id
+        """),
+        {
+            "id": item_id,
+            "description": item.description,
+            "unit": item.unit,
+            "price": item.price
+        }
+    )
+
+    db.commit()
+
+    return {
+        "message": "Item updated"
+    }
+
+
+@app.delete(
+    "/admin/items/{item_id}",
+    dependencies=[Depends(require_admin)]
+)
+def delete_item(
+    item_id: int,
+    db: Session = Depends(get_db)
+):
+
+    db.execute(
+        text("""
+            DELETE FROM items
+            WHERE id = :id
+        """),
+        {
+            "id": item_id
+        }
+    )
+
+    db.commit()
+
+    return {
+        "message": "Item deleted"
+    }
 
 # Added 12 may 2026 
 @app.post("/login")
