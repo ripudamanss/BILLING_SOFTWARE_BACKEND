@@ -86,7 +86,6 @@ def login(data: LoginData):
     )
 
     # Feature added 12 may 26
-    # return {"access_token": token}
     return {
         "access_token": token,
         "token-type": "bearer",
