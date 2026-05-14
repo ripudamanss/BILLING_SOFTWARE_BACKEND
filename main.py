@@ -58,16 +58,6 @@ def verify_password(
         hashed_password
     )
 
-# def get_current_user(token: str = Depends(oauth2_scheme)):
-#     try:
-#         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-#         user = payload.get("sub")
-#         if user is None:
-#             raise HTTPException(status_code=401, detail="Invalid token")
-#         return user
-#     except JWTError:
-#         raise HTTPException(status_code=401, detail="Invalid token")
-
 # Added 12 may 2026
 def get_current_user(
     token: str = Depends(oauth2_scheme)
@@ -124,11 +114,7 @@ app = FastAPI()
 # CORS 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "*"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -174,31 +160,6 @@ def register_user(
     return {
         "message": "User created successfully"
     }
-
-# LOGIN
-# @app.post("/login")
-# def login(data: LoginData):
-#     if data.username != ADMIN_USERNAME or data.password != ADMIN_PASS:
-#         raise HTTPException(status_code=401, detail="Invalid credentials")
-
-#     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-
-#     # Checking whether SECRET KEY is Present or Not !
-#     if not SECRET_KEY:
-#         raise HTTPException(status_code=500, detail="SECRET_KEY missing")
-
-#     token = jwt.encode(
-#         {"sub": data.username, "exp": expire},
-#         SECRET_KEY,
-#         algorithm=ALGORITHM
-#     )
-
-#     # Feature added 12 may 26
-#     return {
-#         "access_token": token,
-#         "token-type": "bearer",
-#         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
-#     }
 
 # Added 12 may 2026 for admin.html
 # =========================
