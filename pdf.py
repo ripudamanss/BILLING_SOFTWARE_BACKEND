@@ -1,3 +1,5 @@
+from sqlalchemy  import text
+from database import SessionLocal
 from supabase import create_client
 import uuid
 from weasyprint import HTML
@@ -11,6 +13,32 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def generate_pdf(filename, bill, items):
+    db = SessionLocal()
+
+    result = db.execute(
+        text("""
+            SELECT *
+            FROM settings
+            LIMIT 1
+        """)
+    )
+
+    settings = result.fetchone()
+
+    company_name = settings[1]
+    address1 = settings[2]
+    address2 = settings[3]
+    phone = settings[4]
+
+    bank_name = settings[5]
+    account_holder = settings[6]
+    account_number = settings[7]
+    ifsc = settings[8]
+
+    footer_note = settings[9]
+
+    show_bank_details = settings[10]
+    show_footer_note = settings[11]
 
     # 🔹 Generate table rows
     rows = ""
@@ -224,10 +252,10 @@ def generate_pdf(filename, bill, items):
         <div class="header">
 
             <div class="left">
-                <b>Devendra Singh Shekhawat</b><br>
-                Gandhi Path West<br>
-                302021<br>
-                8290007899
+                <b>{company_name}</b><br>
+                {address1}<br>
+                {address2}<br>
+                {phone}
             </div>
 
             <div class="right">
@@ -254,9 +282,7 @@ def generate_pdf(filename, bill, items):
         <br>
 
         <p>
-            Dear Sir/Mam<br>
-            Thank you for your valuable inquiry.
-            We are pleased to quote as below.
+            {footer_note if show_footer_note else ""}
         </p>
 
         <table>
@@ -294,14 +320,21 @@ def generate_pdf(filename, bill, items):
         </table>
 
         <div class="footer">
-
+        
+            {
+            f'''
             <div>
                 <b>Account Details for Payments</b><br>
 
-                State Bank Of India<br>
-                A/c Holder Name - Devendra Shekhawat<br>
-                A/c No - 39860765723<br>
-                IFSC CODE - SBIN0061316
+                {bank_name}<br>
+                A/c Holder Name - {account_holder}<br>
+                A/c No - {account_number}<br>
+                IFSC CODE - {ifsc}
+            </div>
+            '''
+            if show_bank_details else ''
+            }
+            
             </div>
 
             <div class="signature">

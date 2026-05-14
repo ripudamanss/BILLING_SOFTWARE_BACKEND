@@ -750,3 +750,85 @@ def delete_bill(bill_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"message": "Deleted"}
+
+# =========================
+# SETTINGS MANAGEMENT
+# =========================
+# Added 14 may 2026
+
+@app.get(
+    "/admin/settings",
+    dependencies=[Depends(require_admin)]
+)
+def get_settings(
+    db: Session = Depends(get_db)
+):
+
+    result = db.execute(
+        text("""
+            SELECT *
+            FROM settings
+            LIMIT 1
+        """)
+    )
+
+    row = result.fetchone()
+
+    if not row:
+        return {}
+
+    return {
+
+        "id": row[0],
+        "company_name": row[1],
+        "address1": row[2],
+        "address2": row[3],
+        "phone": row[4],
+        "bank_name": row[5],
+        "account_holder": row[6],
+        "account_number": row[7],
+        "ifsc": row[8],
+        "footer_note": row[9],
+        "show_bank_details": row[10],
+        "show_footer_note": row[11]
+    }
+
+
+@app.put(
+    "/admin/settings",
+    dependencies=[Depends(require_admin)]
+)
+def update_settings(
+    data: dict,
+    db: Session = Depends(get_db)
+):
+
+    db.execute(
+        text("""
+            UPDATE settings
+
+            SET
+
+                company_name = :company_name,
+                address1 = :address1,
+                address2 = :address2,
+                phone = :phone,
+                bank_name = :bank_name,
+                account_holder = :account_holder,
+                account_number = :account_number,
+                ifsc = :ifsc,
+                footer_note = :footer_note,
+                show_bank_details = :show_bank_details,
+                show_footer_note = :show_footer_note
+
+            WHERE id = 1
+        """),
+
+        data
+    )
+
+    db.commit()
+
+    return {
+        "message": "Settings updated"
+    }
