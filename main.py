@@ -32,7 +32,7 @@ pwd_context = CryptContext(
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # AUTH CONFIG
-SECRET_KEY = os.getenv("SECRET_KEY") #"supersecretkey123"
+SECRET_KEY = os.getenv("SECRET_KEY") 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
