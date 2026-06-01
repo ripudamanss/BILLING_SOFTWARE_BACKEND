@@ -23,8 +23,6 @@ import os
 # Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY") 
-# ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
-# ADMIN_PASS = os.getenv("ADMIN_PASSWORD")
 pwd_context = CryptContext(
     schemes=["bcrypt"],
     deprecated="auto"
