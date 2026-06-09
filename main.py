@@ -89,7 +89,7 @@ def get_current_user(
         )
 
 # Added 12 may 2026
-
+# Added Require Admin Feature to Enhance Safety and prevent unauthorised changes to configuration files and requirements .
 def require_admin(
     current_user = Depends(get_current_user)
 ):
