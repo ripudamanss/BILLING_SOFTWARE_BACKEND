@@ -109,134 +109,7 @@ def verify_api_key(x_api_key: str = Header(None)):
     return True  # disabled
 
 
-def run_startup_migrations():
-    db = SessionLocal()
-    try:
-        # Create settings and customers tables if they don't exist
-        db.execute(text("""
-            CREATE TABLE IF NOT EXISTS customers (
-                customer_name VARCHAR,
-                address1 VARCHAR,
-                address2 VARCHAR,
-                tenant_id VARCHAR
-            );
-        """))
-        db.execute(text("""
-            CREATE TABLE IF NOT EXISTS settings (
-                id SERIAL PRIMARY KEY,
-                company_name VARCHAR,
-                address1 VARCHAR,
-                address2 VARCHAR,
-                phone VARCHAR,
-                bank_name VARCHAR,
-                account_holder VARCHAR,
-                account_number VARCHAR,
-                ifsc VARCHAR,
-                footer_note VARCHAR,
-                show_bank_details BOOLEAN,
-                show_footer_note BOOLEAN,
-                tenant_id VARCHAR UNIQUE
-            );
-        """))
-        db.commit()
 
-        # Ensure missing columns exist in existing tables
-        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id VARCHAR;"))
-        db.execute(text("ALTER TABLE bills ADD COLUMN IF NOT EXISTS tenant_id VARCHAR;"))
-        db.execute(text("ALTER TABLE bills ADD COLUMN IF NOT EXISTS invoice_number INTEGER;"))
-        db.execute(text("ALTER TABLE items ADD COLUMN IF NOT EXISTS tenant_id VARCHAR;"))
-        db.commit()
-
-        # Ensure columns exist
-        try:
-            db.execute(text("SELECT tenant_id FROM settings LIMIT 1"))
-        except Exception:
-            db.rollback()
-            db.execute(text("ALTER TABLE settings ADD COLUMN tenant_id VARCHAR UNIQUE;"))
-            db.commit()
-
-        try:
-            db.execute(text("SELECT tenant_id FROM customers LIMIT 1"))
-        except Exception:
-            db.rollback()
-            db.execute(text("ALTER TABLE customers ADD COLUMN tenant_id VARCHAR;"))
-            db.commit()
-
-        # Check if default tenant exists
-        default_tenant = db.query(models.Tenant).first()
-        if not default_tenant:
-            default_tenant = models.Tenant(name="Default Business")
-            db.add(default_tenant)
-            db.commit()
-            db.refresh(default_tenant)
-
-        tenant_id = default_tenant.id
-
-        # Associate settings
-        result = db.execute(text("SELECT id FROM settings WHERE tenant_id IS NULL")).fetchall()
-        for row in result:
-            db.execute(
-                text("UPDATE settings SET tenant_id = :tenant_id WHERE id = :id"),
-                {"tenant_id": tenant_id, "id": row[0]}
-            )
-        
-        settings_count = db.execute(text("SELECT COUNT(*) FROM settings")).scalar()
-        if settings_count == 0:
-            db.execute(
-                text("""
-                    INSERT INTO settings (
-                        id, company_name, address1, address2, phone, bank_name,
-                        account_holder, account_number, ifsc, footer_note,
-                        show_bank_details, show_footer_note, tenant_id
-                    ) VALUES (
-                        1, 'My Default Company', 'Address Line 1', 'Address Line 2', '0000000000',
-                        'Default Bank', 'Holder', '0000000', 'IFSC000', 'Thank you',
-                        true, true, :tenant_id
-                    )
-                """),
-                {"tenant_id": tenant_id}
-            )
-        db.commit()
-
-        # Associate customers, users, items, bills
-        db.execute(
-            text("UPDATE customers SET tenant_id = :tenant_id WHERE tenant_id IS NULL"),
-            {"tenant_id": tenant_id}
-        )
-        db.commit()
-
-        db.query(models.User).filter(models.User.tenant_id == None).update({models.User.tenant_id: tenant_id})
-        db.commit()
-
-        db.query(models.ItemMaster).filter(models.ItemMaster.tenant_id == None).update({models.ItemMaster.tenant_id: tenant_id})
-        db.commit()
-
-        # Migrate bills and assign invoice_number
-        bills = db.query(models.Bill).filter(models.Bill.tenant_id == None).order_by(models.Bill.id.asc()).all()
-        if bills:
-            for idx, bill in enumerate(bills, start=1):
-                bill.tenant_id = tenant_id
-                bill.invoice_number = idx
-            db.commit()
-
-        # Assign invoice_number to bills without it
-        bills_without_invoice = db.query(models.Bill).filter(
-            models.Bill.tenant_id == tenant_id,
-            models.Bill.invoice_number == None
-        ).order_by(models.Bill.id.asc()).all()
-        if bills_without_invoice:
-            max_inv = db.query(func.max(models.Bill.invoice_number)).filter(
-                models.Bill.tenant_id == tenant_id
-            ).scalar() or 0
-            for idx, bill in enumerate(bills_without_invoice, start=1):
-                bill.invoice_number = max_inv + idx
-            db.commit()
-
-    except Exception as e:
-        db.rollback()
-        print("Startup migrations failed:", e)
-    finally:
-        db.close()
 
 
 app = FastAPI(
@@ -647,7 +520,6 @@ def login(
 
 
 models.Base.metadata.create_all(bind=engine)
-run_startup_migrations()
 
 
 # CREATE BILL
