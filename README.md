@@ -21,7 +21,7 @@
 ## 📸 Preview
 
 <p align="center">
-  <img src="./assets/dashboard.png" width="90%">
+  <img src="./assets/demo.gif" width="900" alt="Demo">
 </p>
 
 ---
@@ -98,5 +98,5 @@ uvicorn app.main:app --reload
 If you like this project, consider giving it a star ⭐.
 
 <p align="center">
-Made with ❤️ by <b>Ripudaman Singh</b>
+Made with ❤️ by <b>Ripudaman Singh Shekhawat</b>
 </p>
