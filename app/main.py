@@ -7,7 +7,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from fastapi.security import OAuth2PasswordBearer
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Query, Response
 from fastapi import FastAPI, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -34,7 +34,7 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login", auto_error=False)
 
 class LoginData(BaseModel):
     username: str
@@ -58,12 +58,19 @@ def verify_password(
 
 # Added 12 may 2026
 def get_current_user(
-    token: str = Depends(oauth2_scheme)
+    token: str = Depends(oauth2_scheme),
+    token_query: str = Query(None, alias="token")
 ):
+    actual_token = token or token_query
+    if not actual_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated"
+        )
 
     try:
         payload = jwt.decode(
-            token,
+            actual_token,
             SECRET_KEY,
             algorithms=[ALGORITHM]
         )
@@ -109,134 +116,7 @@ def verify_api_key(x_api_key: str = Header(None)):
     return True  # disabled
 
 
-def run_startup_migrations():
-    db = SessionLocal()
-    try:
-        # Create settings and customers tables if they don't exist
-        db.execute(text("""
-            CREATE TABLE IF NOT EXISTS customers (
-                customer_name VARCHAR,
-                address1 VARCHAR,
-                address2 VARCHAR,
-                tenant_id VARCHAR
-            );
-        """))
-        db.execute(text("""
-            CREATE TABLE IF NOT EXISTS settings (
-                id SERIAL PRIMARY KEY,
-                company_name VARCHAR,
-                address1 VARCHAR,
-                address2 VARCHAR,
-                phone VARCHAR,
-                bank_name VARCHAR,
-                account_holder VARCHAR,
-                account_number VARCHAR,
-                ifsc VARCHAR,
-                footer_note VARCHAR,
-                show_bank_details BOOLEAN,
-                show_footer_note BOOLEAN,
-                tenant_id VARCHAR UNIQUE
-            );
-        """))
-        db.commit()
 
-        # Ensure missing columns exist in existing tables
-        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id VARCHAR;"))
-        db.execute(text("ALTER TABLE bills ADD COLUMN IF NOT EXISTS tenant_id VARCHAR;"))
-        db.execute(text("ALTER TABLE bills ADD COLUMN IF NOT EXISTS invoice_number INTEGER;"))
-        db.execute(text("ALTER TABLE items ADD COLUMN IF NOT EXISTS tenant_id VARCHAR;"))
-        db.commit()
-
-        # Ensure columns exist
-        try:
-            db.execute(text("SELECT tenant_id FROM settings LIMIT 1"))
-        except Exception:
-            db.rollback()
-            db.execute(text("ALTER TABLE settings ADD COLUMN tenant_id VARCHAR UNIQUE;"))
-            db.commit()
-
-        try:
-            db.execute(text("SELECT tenant_id FROM customers LIMIT 1"))
-        except Exception:
-            db.rollback()
-            db.execute(text("ALTER TABLE customers ADD COLUMN tenant_id VARCHAR;"))
-            db.commit()
-
-        # Check if default tenant exists
-        default_tenant = db.query(models.Tenant).first()
-        if not default_tenant:
-            default_tenant = models.Tenant(name="Default Business")
-            db.add(default_tenant)
-            db.commit()
-            db.refresh(default_tenant)
-
-        tenant_id = default_tenant.id
-
-        # Associate settings
-        result = db.execute(text("SELECT id FROM settings WHERE tenant_id IS NULL")).fetchall()
-        for row in result:
-            db.execute(
-                text("UPDATE settings SET tenant_id = :tenant_id WHERE id = :id"),
-                {"tenant_id": tenant_id, "id": row[0]}
-            )
-        
-        settings_count = db.execute(text("SELECT COUNT(*) FROM settings")).scalar()
-        if settings_count == 0:
-            db.execute(
-                text("""
-                    INSERT INTO settings (
-                        id, company_name, address1, address2, phone, bank_name,
-                        account_holder, account_number, ifsc, footer_note,
-                        show_bank_details, show_footer_note, tenant_id
-                    ) VALUES (
-                        1, 'My Default Company', 'Address Line 1', 'Address Line 2', '0000000000',
-                        'Default Bank', 'Holder', '0000000', 'IFSC000', 'Thank you',
-                        true, true, :tenant_id
-                    )
-                """),
-                {"tenant_id": tenant_id}
-            )
-        db.commit()
-
-        # Associate customers, users, items, bills
-        db.execute(
-            text("UPDATE customers SET tenant_id = :tenant_id WHERE tenant_id IS NULL"),
-            {"tenant_id": tenant_id}
-        )
-        db.commit()
-
-        db.query(models.User).filter(models.User.tenant_id == None).update({models.User.tenant_id: tenant_id})
-        db.commit()
-
-        db.query(models.ItemMaster).filter(models.ItemMaster.tenant_id == None).update({models.ItemMaster.tenant_id: tenant_id})
-        db.commit()
-
-        # Migrate bills and assign invoice_number
-        bills = db.query(models.Bill).filter(models.Bill.tenant_id == None).order_by(models.Bill.id.asc()).all()
-        if bills:
-            for idx, bill in enumerate(bills, start=1):
-                bill.tenant_id = tenant_id
-                bill.invoice_number = idx
-            db.commit()
-
-        # Assign invoice_number to bills without it
-        bills_without_invoice = db.query(models.Bill).filter(
-            models.Bill.tenant_id == tenant_id,
-            models.Bill.invoice_number == None
-        ).order_by(models.Bill.id.asc()).all()
-        if bills_without_invoice:
-            max_inv = db.query(func.max(models.Bill.invoice_number)).filter(
-                models.Bill.tenant_id == tenant_id
-            ).scalar() or 0
-            for idx, bill in enumerate(bills_without_invoice, start=1):
-                bill.invoice_number = max_inv + idx
-            db.commit()
-
-    except Exception as e:
-        db.rollback()
-        print("Startup migrations failed:", e)
-    finally:
-        db.close()
 
 
 app = FastAPI(
@@ -647,7 +527,6 @@ def login(
 
 
 models.Base.metadata.create_all(bind=engine)
-run_startup_migrations()
 
 
 # CREATE BILL
@@ -800,7 +679,7 @@ def update_bill(
 
     return bill
 
-# PDF API (UPDATED FOR PERMANENT STORAGE)
+# PDF API (UPDATED FOR SECURE PDF DELIVERY)
 @app.get("/bills/{bill_id}/pdf", dependencies=[Depends(get_current_user)])
 def get_pdf(
     bill_id: int,
@@ -817,42 +696,59 @@ def get_pdf(
         raise HTTPException(status_code=404, detail="Bill not found")
 
     if bill.pdf_url:
-        return {
-            "success": True,
-            "message": "Existing PDF loaded successfully!",
-            "pdf_url": bill.pdf_url
+        supabase_path = bill.pdf_url
+        if supabase_path.startswith("http://") or supabase_path.startswith("https://"):
+            if "/bills/" in supabase_path:
+                supabase_path = supabase_path.split("/bills/")[-1]
+
+        try:
+            pdf_bytes = supabase.storage.from_("bills").download(supabase_path)
+        except Exception as e:
+            print("SUPABASE DOWNLOAD ERROR:", e)
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to retrieve PDF from storage"
+            )
+
+        filename = supabase_path.split("/")[-1]
+        headers = {
+            "Content-Disposition": f'inline; filename="{filename}"'
         }
+        return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
     items = db.query(models.BillItem).filter_by(bill_id=bill_id).all()
 
     # Generate unique file name to prevent unauthorized access
     filename = f"bill_{bill_id}_{uuid.uuid4().hex}.pdf"
 
-
     # PDF GENERATION
     try:
         generate_pdf(filename, bill, items, current_user["tenant_id"])
-
         print("PDF Generating...")
         print("PDF CREATED:", filename)
-
     except Exception as e:
-
         print("PDF Generation ERROR:", e)
-
         raise HTTPException(
             status_code=500,
             detail="PDF generation Failed!"
         )
 
+    # Read generated PDF bytes before uploading & deleting local file
+    try:
+        with open(filename, "rb") as f:
+            pdf_bytes = f.read()
+    except Exception as e:
+        print("READ GENERATED FILE ERROR:", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to read generated PDF"
+        )
+
     # Upload to Supabase under tenant folder prefix
     supabase_path = f"{current_user['tenant_id']}/{filename}"
     try:
-
         with open(filename, "rb") as f:
-
             f.seek(0)
-
             supabase.storage.from_("bills").upload(
                 supabase_path,
                 f,
@@ -861,50 +757,35 @@ def get_pdf(
                     "upsert": "true"
                 }
             )
-
         print("PDF uploaded successfully!")
-
     except Exception as e:
-
         print("SUPABASE UPLOAD ERROR:", e)
-
         raise HTTPException(
             status_code=500,
             detail="Supabase upload failed"
         )
 
-    # Get public URL
+    # Save PDF path permanently in DB
     try:
-
-        public_url = supabase.storage.from_("bills").get_public_url(supabase_path)
-
-        # Save PDF URL permanently in DB
-        bill.pdf_url = public_url
-
+        bill.pdf_url = supabase_path
         db.commit()
-
     except Exception as e:
-
-        print("URL ERROR:", e)
-
+        print("DB SAVE ERROR:", e)
         raise HTTPException(
             status_code=500,
-            detail="URL retrieval failed"
+            detail="Failed to save PDF path"
         )
 
     # Delete local temp PDF
     try:
         os.remove(filename)
-
     except Exception as e:
         print("LOCAL FILE DELETE ERROR:", e)
 
-    # Final response
-    return {
-        "success": True,
-        "message": "PDF GENERATED SUCCESSFULLY!",
-        "pdf_url": public_url
+    headers = {
+        "Content-Disposition": f'inline; filename="{filename}"'
     }
+    return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
 
 # DELETE
