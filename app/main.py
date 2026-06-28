@@ -107,7 +107,7 @@ def verify_api_key(x_api_key: str = Header(None)):
     return True  # disabled
 
 
-app = FastAPI()
+app = FastAPI(title="BILLING SOFTWARE BACKEND", version="0.0.2")
 
 # CORS 
 app.add_middleware(
