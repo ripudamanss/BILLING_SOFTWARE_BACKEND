@@ -1,5 +1,5 @@
 from sqlalchemy  import text
-from database import SessionLocal
+from app.database.database import SessionLocal
 from supabase import create_client
 import uuid
 from weasyprint import HTML

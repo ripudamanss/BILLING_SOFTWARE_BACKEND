@@ -1,6 +1,6 @@
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-import models
+import app.models.models as models
 
 def create_bill(db: Session, bill_data):
 

@@ -12,9 +12,9 @@ from fastapi import FastAPI, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-import models, schemas, crud
-from database import SessionLocal, engine
-from pdf import generate_pdf
+import app.models.models as models, app.schemas.schemas as schemas, app.services.crud as crud
+from app.database.database import SessionLocal, engine
+from app.services.pdf import generate_pdf
 from fastapi.middleware.cors import CORSMiddleware
 from typing import cast
 import os
