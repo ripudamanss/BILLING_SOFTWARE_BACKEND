@@ -7,7 +7,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from fastapi.security import OAuth2PasswordBearer
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Query, Response
 from fastapi import FastAPI, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -34,7 +34,7 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login", auto_error=False)
 
 class LoginData(BaseModel):
     username: str
@@ -58,12 +58,19 @@ def verify_password(
 
 # Added 12 may 2026
 def get_current_user(
-    token: str = Depends(oauth2_scheme)
+    token: str = Depends(oauth2_scheme),
+    token_query: str = Query(None, alias="token")
 ):
+    actual_token = token or token_query
+    if not actual_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated"
+        )
 
     try:
         payload = jwt.decode(
-            token,
+            actual_token,
             SECRET_KEY,
             algorithms=[ALGORITHM]
         )
@@ -672,7 +679,7 @@ def update_bill(
 
     return bill
 
-# PDF API (UPDATED FOR PERMANENT STORAGE)
+# PDF API (UPDATED FOR SECURE PDF DELIVERY)
 @app.get("/bills/{bill_id}/pdf", dependencies=[Depends(get_current_user)])
 def get_pdf(
     bill_id: int,
@@ -689,42 +696,59 @@ def get_pdf(
         raise HTTPException(status_code=404, detail="Bill not found")
 
     if bill.pdf_url:
-        return {
-            "success": True,
-            "message": "Existing PDF loaded successfully!",
-            "pdf_url": bill.pdf_url
+        supabase_path = bill.pdf_url
+        if supabase_path.startswith("http://") or supabase_path.startswith("https://"):
+            if "/bills/" in supabase_path:
+                supabase_path = supabase_path.split("/bills/")[-1]
+
+        try:
+            pdf_bytes = supabase.storage.from_("bills").download(supabase_path)
+        except Exception as e:
+            print("SUPABASE DOWNLOAD ERROR:", e)
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to retrieve PDF from storage"
+            )
+
+        filename = supabase_path.split("/")[-1]
+        headers = {
+            "Content-Disposition": f'inline; filename="{filename}"'
         }
+        return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
     items = db.query(models.BillItem).filter_by(bill_id=bill_id).all()
 
     # Generate unique file name to prevent unauthorized access
     filename = f"bill_{bill_id}_{uuid.uuid4().hex}.pdf"
 
-
     # PDF GENERATION
     try:
         generate_pdf(filename, bill, items, current_user["tenant_id"])
-
         print("PDF Generating...")
         print("PDF CREATED:", filename)
-
     except Exception as e:
-
         print("PDF Generation ERROR:", e)
-
         raise HTTPException(
             status_code=500,
             detail="PDF generation Failed!"
         )
 
+    # Read generated PDF bytes before uploading & deleting local file
+    try:
+        with open(filename, "rb") as f:
+            pdf_bytes = f.read()
+    except Exception as e:
+        print("READ GENERATED FILE ERROR:", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to read generated PDF"
+        )
+
     # Upload to Supabase under tenant folder prefix
     supabase_path = f"{current_user['tenant_id']}/{filename}"
     try:
-
         with open(filename, "rb") as f:
-
             f.seek(0)
-
             supabase.storage.from_("bills").upload(
                 supabase_path,
                 f,
@@ -733,50 +757,35 @@ def get_pdf(
                     "upsert": "true"
                 }
             )
-
         print("PDF uploaded successfully!")
-
     except Exception as e:
-
         print("SUPABASE UPLOAD ERROR:", e)
-
         raise HTTPException(
             status_code=500,
             detail="Supabase upload failed"
         )
 
-    # Get public URL
+    # Save PDF path permanently in DB
     try:
-
-        public_url = supabase.storage.from_("bills").get_public_url(supabase_path)
-
-        # Save PDF URL permanently in DB
-        bill.pdf_url = public_url
-
+        bill.pdf_url = supabase_path
         db.commit()
-
     except Exception as e:
-
-        print("URL ERROR:", e)
-
+        print("DB SAVE ERROR:", e)
         raise HTTPException(
             status_code=500,
-            detail="URL retrieval failed"
+            detail="Failed to save PDF path"
         )
 
     # Delete local temp PDF
     try:
         os.remove(filename)
-
     except Exception as e:
         print("LOCAL FILE DELETE ERROR:", e)
 
-    # Final response
-    return {
-        "success": True,
-        "message": "PDF GENERATED SUCCESSFULLY!",
-        "pdf_url": public_url
+    headers = {
+        "Content-Disposition": f'inline; filename="{filename}"'
     }
+    return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
 
 # DELETE
