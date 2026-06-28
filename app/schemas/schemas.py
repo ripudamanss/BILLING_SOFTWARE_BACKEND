@@ -18,11 +18,11 @@ class BillCreate(BaseModel):
     
 class BillResponse(BaseModel):
     id: int
+    invoice_number: int | None = None
     customer: str
     total: float
     
     class Config:
-        # orm_mode = True
         from_attributes = True
         
 # Added 12 may 2026

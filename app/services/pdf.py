@@ -2,25 +2,27 @@ from sqlalchemy  import text
 from app.database.database import SessionLocal
 from supabase import create_client
 import uuid
-from weasyprint import HTML
 from dotenv import load_dotenv
 load_dotenv()
 import os
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL") or "https://placeholder.supabase.co"
+SUPABASE_KEY = os.getenv("SUPABASE_KEY") or "placeholder-key"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def generate_pdf(filename, bill, items):
+def generate_pdf(filename, bill, items, tenant_id):
+    from weasyprint import HTML
     db = SessionLocal()
 
     result = db.execute(
         text("""
             SELECT *
             FROM settings
+            WHERE tenant_id = :tenant_id
             LIMIT 1
-        """)
+        """),
+        {"tenant_id": tenant_id}
     )
 
     settings = result.fetchone()
@@ -259,7 +261,7 @@ def generate_pdf(filename, bill, items):
             </div>
 
             <div class="right">
-                <b>Bill No:</b> {bill.id}<br>
+                <b>Bill No:</b> {bill.invoice_number}<br>
                 <b>Date:</b> {bill.date.strftime("%d/%m/%Y")}
             </div>
 

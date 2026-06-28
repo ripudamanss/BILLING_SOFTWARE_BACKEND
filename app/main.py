@@ -11,7 +11,7 @@ from fastapi import Header, HTTPException
 from fastapi import FastAPI, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, func
 import app.models.models as models, app.schemas.schemas as schemas, app.services.crud as crud
 from app.database.database import SessionLocal, engine
 from app.services.pdf import generate_pdf
@@ -21,8 +21,8 @@ import os
 
 
 # Supabase client
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY") 
+SUPABASE_URL = os.getenv("SUPABASE_URL") or "https://placeholder.supabase.co"
+SUPABASE_KEY = os.getenv("SUPABASE_KEY") or "placeholder-key"
 pwd_context = CryptContext(
     schemes=["bcrypt"],
     deprecated="auto"
@@ -70,8 +70,9 @@ def get_current_user(
 
         username = payload.get("sub")
         role = payload.get("role")
+        tenant_id = payload.get("tenant_id")
 
-        if username is None:
+        if username is None or tenant_id is None:
             raise HTTPException(
                 status_code=401,
                 detail="Invalid token"
@@ -79,7 +80,8 @@ def get_current_user(
 
         return {
             "username": username,
-            "role": role
+            "role": role,
+            "tenant_id": tenant_id
         }
 
     except JWTError:
@@ -105,6 +107,136 @@ def require_admin(
 
 def verify_api_key(x_api_key: str = Header(None)):
     return True  # disabled
+
+
+def run_startup_migrations():
+    db = SessionLocal()
+    try:
+        # Create settings and customers tables if they don't exist
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS customers (
+                customer_name VARCHAR,
+                address1 VARCHAR,
+                address2 VARCHAR,
+                tenant_id VARCHAR
+            );
+        """))
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS settings (
+                id SERIAL PRIMARY KEY,
+                company_name VARCHAR,
+                address1 VARCHAR,
+                address2 VARCHAR,
+                phone VARCHAR,
+                bank_name VARCHAR,
+                account_holder VARCHAR,
+                account_number VARCHAR,
+                ifsc VARCHAR,
+                footer_note VARCHAR,
+                show_bank_details BOOLEAN,
+                show_footer_note BOOLEAN,
+                tenant_id VARCHAR UNIQUE
+            );
+        """))
+        db.commit()
+
+        # Ensure missing columns exist in existing tables
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id VARCHAR;"))
+        db.execute(text("ALTER TABLE bills ADD COLUMN IF NOT EXISTS tenant_id VARCHAR;"))
+        db.execute(text("ALTER TABLE bills ADD COLUMN IF NOT EXISTS invoice_number INTEGER;"))
+        db.execute(text("ALTER TABLE items ADD COLUMN IF NOT EXISTS tenant_id VARCHAR;"))
+        db.commit()
+
+        # Ensure columns exist
+        try:
+            db.execute(text("SELECT tenant_id FROM settings LIMIT 1"))
+        except Exception:
+            db.rollback()
+            db.execute(text("ALTER TABLE settings ADD COLUMN tenant_id VARCHAR UNIQUE;"))
+            db.commit()
+
+        try:
+            db.execute(text("SELECT tenant_id FROM customers LIMIT 1"))
+        except Exception:
+            db.rollback()
+            db.execute(text("ALTER TABLE customers ADD COLUMN tenant_id VARCHAR;"))
+            db.commit()
+
+        # Check if default tenant exists
+        default_tenant = db.query(models.Tenant).first()
+        if not default_tenant:
+            default_tenant = models.Tenant(name="Default Business")
+            db.add(default_tenant)
+            db.commit()
+            db.refresh(default_tenant)
+
+        tenant_id = default_tenant.id
+
+        # Associate settings
+        result = db.execute(text("SELECT id FROM settings WHERE tenant_id IS NULL")).fetchall()
+        for row in result:
+            db.execute(
+                text("UPDATE settings SET tenant_id = :tenant_id WHERE id = :id"),
+                {"tenant_id": tenant_id, "id": row[0]}
+            )
+        
+        settings_count = db.execute(text("SELECT COUNT(*) FROM settings")).scalar()
+        if settings_count == 0:
+            db.execute(
+                text("""
+                    INSERT INTO settings (
+                        id, company_name, address1, address2, phone, bank_name,
+                        account_holder, account_number, ifsc, footer_note,
+                        show_bank_details, show_footer_note, tenant_id
+                    ) VALUES (
+                        1, 'My Default Company', 'Address Line 1', 'Address Line 2', '0000000000',
+                        'Default Bank', 'Holder', '0000000', 'IFSC000', 'Thank you',
+                        true, true, :tenant_id
+                    )
+                """),
+                {"tenant_id": tenant_id}
+            )
+        db.commit()
+
+        # Associate customers, users, items, bills
+        db.execute(
+            text("UPDATE customers SET tenant_id = :tenant_id WHERE tenant_id IS NULL"),
+            {"tenant_id": tenant_id}
+        )
+        db.commit()
+
+        db.query(models.User).filter(models.User.tenant_id == None).update({models.User.tenant_id: tenant_id})
+        db.commit()
+
+        db.query(models.ItemMaster).filter(models.ItemMaster.tenant_id == None).update({models.ItemMaster.tenant_id: tenant_id})
+        db.commit()
+
+        # Migrate bills and assign invoice_number
+        bills = db.query(models.Bill).filter(models.Bill.tenant_id == None).order_by(models.Bill.id.asc()).all()
+        if bills:
+            for idx, bill in enumerate(bills, start=1):
+                bill.tenant_id = tenant_id
+                bill.invoice_number = idx
+            db.commit()
+
+        # Assign invoice_number to bills without it
+        bills_without_invoice = db.query(models.Bill).filter(
+            models.Bill.tenant_id == tenant_id,
+            models.Bill.invoice_number == None
+        ).order_by(models.Bill.id.asc()).all()
+        if bills_without_invoice:
+            max_inv = db.query(func.max(models.Bill.invoice_number)).filter(
+                models.Bill.tenant_id == tenant_id
+            ).scalar() or 0
+            for idx, bill in enumerate(bills_without_invoice, start=1):
+                bill.invoice_number = max_inv + idx
+            db.commit()
+
+    except Exception as e:
+        db.rollback()
+        print("Startup migrations failed:", e)
+    finally:
+        db.close()
 
 
 app = FastAPI(
@@ -135,7 +267,8 @@ def get_db():
 @app.post("/register", dependencies=[Depends(require_admin)])
 def register_user(
     user: schemas.UserCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
 
     existing_user = db.query(models.User).filter(
@@ -155,7 +288,8 @@ def register_user(
     new_user = models.User(
         username=user.username,
         password=hashed_password,
-        role=user.role
+        role=user.role,
+        tenant_id=current_user["tenant_id"]
     )
     db.add(new_user)
     db.commit()
@@ -163,7 +297,6 @@ def register_user(
         "message": "User created successfully"
     }
 
-# Added 12 may 2026 for admin.html
 # =========================
 # ADMIN USER MANAGEMENT
 # =========================
@@ -173,10 +306,11 @@ def register_user(
     dependencies=[Depends(require_admin)]
 )
 def get_users(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
 
-    users = db.query(models.User).all()
+    users = db.query(models.User).filter(models.User.tenant_id == current_user["tenant_id"]).all()
 
     return [
 
@@ -197,7 +331,8 @@ def get_users(
 )
 def create_user(
     user: schemas.UserCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
 
     existing_user = db.query(models.User).filter(
@@ -215,6 +350,7 @@ def create_user(
         username=user.username,
         password=hash_password(user.password),
         role=user.role,
+        tenant_id=current_user["tenant_id"],
         is_active=True
     )
 
@@ -233,10 +369,14 @@ def create_user(
 )
 def toggle_user(
     user_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
 
-    user = db.get(models.User, user_id)
+    user = db.query(models.User).filter(
+        models.User.id == user_id,
+        models.User.tenant_id == current_user["tenant_id"]
+    ).first()
 
     if not user:
 
@@ -260,10 +400,14 @@ def toggle_user(
 )
 def delete_user(
     user_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
 
-    user = db.get(models.User, user_id)
+    user = db.query(models.User).filter(
+        models.User.id == user_id,
+        models.User.tenant_id == current_user["tenant_id"]
+    ).first()
 
     if not user:
 
@@ -290,7 +434,8 @@ def delete_user(
     dependencies=[Depends(require_admin)]
 )
 def admin_get_items(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
 
     result = db.execute(
@@ -301,8 +446,10 @@ def admin_get_items(
                 unit,
                 price
             FROM items
+            WHERE tenant_id = :tenant_id
             ORDER BY description
-        """)
+        """),
+        {"tenant_id": current_user["tenant_id"]}
     )
 
     rows = result.fetchall()
@@ -326,26 +473,37 @@ def admin_get_items(
 )
 def create_item(
     item: schemas.ItemCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
+    # Check if item description already exists for this tenant to respect UniqueConstraint
+    existing = db.execute(
+        text("SELECT id FROM items WHERE tenant_id = :tenant_id AND description = :desc"),
+        {"tenant_id": current_user["tenant_id"], "desc": item.description}
+    ).fetchone()
+    if existing:
+        raise HTTPException(status_code=400, detail="Item with this description already exists")
 
     db.execute(
         text("""
             INSERT INTO items (
                 description,
                 unit,
-                price
+                price,
+                tenant_id
             )
             VALUES (
                 :description,
                 :unit,
-                :price
+                :price,
+                :tenant_id
             )
         """),
         {
             "description": item.description,
             "unit": item.unit,
-            "price": item.price
+            "price": item.price,
+            "tenant_id": current_user["tenant_id"]
         }
     )
 
@@ -363,8 +521,16 @@ def create_item(
 def update_item(
     item_id: int,
     item: schemas.ItemCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
+    # Ensure item belongs to tenant
+    existing = db.execute(
+        text("SELECT id FROM items WHERE id = :id AND tenant_id = :tenant_id"),
+        {"id": item_id, "tenant_id": current_user["tenant_id"]}
+    ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail="Item not found")
 
     db.execute(
         text("""
@@ -373,13 +539,14 @@ def update_item(
                 description = :description,
                 unit = :unit,
                 price = :price
-            WHERE id = :id
+            WHERE id = :id AND tenant_id = :tenant_id
         """),
         {
             "id": item_id,
             "description": item.description,
             "unit": item.unit,
-            "price": item.price
+            "price": item.price,
+            "tenant_id": current_user["tenant_id"]
         }
     )
 
@@ -396,16 +563,25 @@ def update_item(
 )
 def delete_item(
     item_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
+    # Ensure item belongs to tenant
+    existing = db.execute(
+        text("SELECT id FROM items WHERE id = :id AND tenant_id = :tenant_id"),
+        {"id": item_id, "tenant_id": current_user["tenant_id"]}
+    ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail="Item not found")
 
     db.execute(
         text("""
             DELETE FROM items
-            WHERE id = :id
+            WHERE id = :id AND tenant_id = :tenant_id
         """),
         {
-            "id": item_id
+            "id": item_id,
+            "tenant_id": current_user["tenant_id"]
         }
     )
 
@@ -455,6 +631,7 @@ def login(
         {
             "sub": user.username,
             "role": user.role,
+            "tenant_id": user.tenant_id,
             "exp": expire
         },
         SECRET_KEY,
@@ -470,27 +647,36 @@ def login(
 
 
 models.Base.metadata.create_all(bind=engine)
+run_startup_migrations()
 
 
 # CREATE BILL
 @app.post("/bills", response_model=schemas.BillResponse, dependencies=[Depends(get_current_user)])
-def create_bill(bill: schemas.BillCreate, db: Session = Depends(get_db)):
+def create_bill(
+    bill: schemas.BillCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
     print("CREATE BILL DATA: ", bill)
-    return crud.create_bill(db, bill)
+    return crud.create_bill(db, bill, current_user["tenant_id"])
 
 # Get Customer data
 @app.get("/customers")
-def get_customers(db: Session = Depends(get_db)):
+def get_customers(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
     result = db.execute(
-
         text("""
             SELECT
                 customer_name,
                 address1,
                 address2
             FROM customers
+            WHERE tenant_id = :tenant_id
             ORDER BY customer_name
-        """)
+        """),
+        {"tenant_id": current_user["tenant_id"]}
     )
 
     rows = result.fetchall()
@@ -508,7 +694,10 @@ def get_customers(db: Session = Depends(get_db)):
     
 # Get Customer Items
 @app.get("/items")
-def get_items(db: Session = Depends(get_db)):
+def get_items(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
     result = db.execute(
         text("""
             SELECT
@@ -516,8 +705,10 @@ def get_items(db: Session = Depends(get_db)):
                 unit,
                 price
             FROM items
+            WHERE tenant_id = :tenant_id
             ORDER BY description
-        """)
+        """),
+        {"tenant_id": current_user["tenant_id"]}
     )
     rows = result.fetchall()
 
@@ -532,18 +723,25 @@ def get_items(db: Session = Depends(get_db)):
 
 #GET ALL
 @app.get("/bills", dependencies=[Depends(get_current_user)])
-def get_bills(db: Session = Depends(get_db)):
-    return db.query(models.Bill).order_by(models.Bill.id.asc()).all()
+def get_bills(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    return db.query(models.Bill).filter(
+        models.Bill.tenant_id == current_user["tenant_id"]
+    ).order_by(models.Bill.id.asc()).all()
 
 # GET SINGLE
 @app.get("/bills/{bill_id}", dependencies=[Depends(get_current_user)])
-def get_bill(bill_id: int, db: Session = Depends(get_db)):
-    bill = db.get(models.Bill, bill_id)
-
-    if not bill:
-        raise HTTPException(status_code=404, detail="Bill not found")
-
-    bill = cast(models.Bill, bill)
+def get_bill(
+    bill_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    bill = db.query(models.Bill).filter(
+        models.Bill.id == bill_id,
+        models.Bill.tenant_id == current_user["tenant_id"]
+    ).first()
 
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
@@ -557,19 +755,26 @@ def get_bill(bill_id: int, db: Session = Depends(get_db)):
 
 # UPDATE
 @app.put("/bills/{bill_id}", dependencies=[Depends(get_current_user)])
-def update_bill(bill_id: int, bill_data: schemas.BillCreate, db: Session = Depends(get_db)):
+def update_bill(
+    bill_id: int,
+    bill_data: schemas.BillCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
 
-    # bill = db.query(models.Bill).get(bill_id)
-    bill = db.get(models.Bill, bill_id)
+    bill = db.query(models.Bill).filter(
+        models.Bill.id == bill_id,
+        models.Bill.tenant_id == current_user["tenant_id"]
+    ).first()
 
     if not bill:
-        raise HTTPException(status_code=404, detail="Bill not Found!") #Fix to Raise Exception That Bill Is not Found
+        raise HTTPException(status_code=404, detail="Bill not Found!")
 
-    bill.customer = bill_data.customer # type: ignore
-    bill.customeradd1 = bill_data.customeradd1 #type: ignore
-    bill.customeradd2 = bill_data.customeradd2 #type: ignore
-    bill.date = bill_data.date  # type: ignore
-    bill.pdf_url = None #type: ignore
+    bill.customer = bill_data.customer
+    bill.customeradd1 = bill_data.customeradd1
+    bill.customeradd2 = bill_data.customeradd2
+    bill.date = bill_data.date
+    bill.pdf_url = None
 
     db.query(models.BillItem).filter_by(bill_id=bill_id).delete()
 
@@ -590,21 +795,27 @@ def update_bill(bill_id: int, bill_data: schemas.BillCreate, db: Session = Depen
         )
         db.add(db_item)
 
-    bill.total = round(total, 2)  # type: ignore
+    bill.total = round(total, 2)
     db.commit()
 
     return bill
 
 # PDF API (UPDATED FOR PERMANENT STORAGE)
 @app.get("/bills/{bill_id}/pdf", dependencies=[Depends(get_current_user)])
-def get_pdf(bill_id: int, db: Session = Depends(get_db)):
+def get_pdf(
+    bill_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
 
-    bill = db.get(models.Bill, bill_id)
+    bill = db.query(models.Bill).filter(
+        models.Bill.id == bill_id,
+        models.Bill.tenant_id == current_user["tenant_id"]
+    ).first()
 
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
 
-    # ADDED: Return existing PDF if already generated
     if bill.pdf_url:
         return {
             "success": True,
@@ -620,9 +831,7 @@ def get_pdf(bill_id: int, db: Session = Depends(get_db)):
 
     # PDF GENERATION
     try:
-
-        # Generate PDF locally
-        generate_pdf(filename, bill, items)
+        generate_pdf(filename, bill, items, current_user["tenant_id"])
 
         print("PDF Generating...")
         print("PDF CREATED:", filename)
@@ -636,7 +845,8 @@ def get_pdf(bill_id: int, db: Session = Depends(get_db)):
             detail="PDF generation Failed!"
         )
 
-    # Upload to Supabase
+    # Upload to Supabase under tenant folder prefix
+    supabase_path = f"{current_user['tenant_id']}/{filename}"
     try:
 
         with open(filename, "rb") as f:
@@ -644,12 +854,12 @@ def get_pdf(bill_id: int, db: Session = Depends(get_db)):
             f.seek(0)
 
             supabase.storage.from_("bills").upload(
-                filename,
+                supabase_path,
                 f,
                 {
                     "content-type": "application/pdf",
                     "upsert": "true"
-                } #type: ignore
+                }
             )
 
         print("PDF uploaded successfully!")
@@ -663,13 +873,13 @@ def get_pdf(bill_id: int, db: Session = Depends(get_db)):
             detail="Supabase upload failed"
         )
 
-    # 🔥 Get public URL
+    # Get public URL
     try:
 
-        public_url = supabase.storage.from_("bills").get_public_url(filename)
+        public_url = supabase.storage.from_("bills").get_public_url(supabase_path)
 
-        # 🔥 ADDED: Save PDF URL permanently in DB
-        bill.pdf_url = public_url #type: ignore
+        # Save PDF URL permanently in DB
+        bill.pdf_url = public_url
 
         db.commit()
 
@@ -682,14 +892,14 @@ def get_pdf(bill_id: int, db: Session = Depends(get_db)):
             detail="URL retrieval failed"
         )
 
-    # 🔥 Delete local temp PDF
+    # Delete local temp PDF
     try:
         os.remove(filename)
 
     except Exception as e:
         print("LOCAL FILE DELETE ERROR:", e)
 
-    # 🔥 Final response
+    # Final response
     return {
         "success": True,
         "message": "PDF GENERATED SUCCESSFULLY!",
@@ -699,9 +909,16 @@ def get_pdf(bill_id: int, db: Session = Depends(get_db)):
 
 # DELETE
 @app.delete("/bills/{bill_id}", dependencies=[Depends(get_current_user)])
-def delete_bill(bill_id: int, db: Session = Depends(get_db)):
+def delete_bill(
+    bill_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
 
-    bill = db.get(models.Bill, bill_id)
+    bill = db.query(models.Bill).filter(
+        models.Bill.id == bill_id,
+        models.Bill.tenant_id == current_user["tenant_id"]
+    ).first()
 
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
@@ -717,22 +934,24 @@ def delete_bill(bill_id: int, db: Session = Depends(get_db)):
 # =========================
 # SETTINGS MANAGEMENT
 # =========================
-# Added 14 may 2026
 
 @app.get(
     "/admin/settings",
     dependencies=[Depends(require_admin)]
 )
 def get_settings(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
 
     result = db.execute(
         text("""
             SELECT *
             FROM settings
+            WHERE tenant_id = :tenant_id
             LIMIT 1
-        """)
+        """),
+        {"tenant_id": current_user["tenant_id"]}
     )
 
     row = result.fetchone()
@@ -763,7 +982,8 @@ def get_settings(
 )
 def update_settings(
     data: dict,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
 
     db.execute(
@@ -784,10 +1004,9 @@ def update_settings(
                 show_bank_details = :show_bank_details,
                 show_footer_note = :show_footer_note
 
-            WHERE id = 1
+            WHERE tenant_id = :tenant_id
         """),
-
-        data
+        {**data, "tenant_id": current_user["tenant_id"]}
     )
 
     db.commit()
